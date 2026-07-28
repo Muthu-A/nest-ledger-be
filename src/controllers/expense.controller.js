@@ -1,7 +1,23 @@
+const mongoose = require("mongoose");
 const Expense = require("../models/Expense");
 const socketService = require("../services/socketService");
 const { makeActivityMessage } = require("../socket/socketEvents");
 const { getAllSubcategories } = require("../utils/expenseCategories");
+
+const MONTH_LABELS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec"
+];
 
 exports.getExpenses = async (req, res) => {
   try {
@@ -13,8 +29,17 @@ exports.getExpenses = async (req, res) => {
     if (monthRange && monthRange.startDate && monthRange.endDate) {
       match.date = { $gte: monthRange.startDate, $lte: monthRange.endDate };
     }
-    const expenses = await Expense.find(match).sort({ date: -1 });
-    res.json(expenses);
+    const expenses = await Expense.find(match)
+      .sort({ date: -1 })
+      .populate("createdBy", "name")
+      .lean();
+
+    const expensesWithCreator = expenses.map((expense) => ({
+      ...expense,
+      createdByName: expense.createdBy?.name || null
+    }));
+
+    res.json(expensesWithCreator);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Failed to fetch expenses" });
@@ -114,5 +139,231 @@ exports.deleteExpense = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Failed to delete expense" });
+  }
+};
+
+// Expense Dashboard: Returns aggregated expense analytics for the selected month
+exports.getExpenseDashboard = async (req, res) => {
+  try {
+    const { monthRange } = req;
+    if (!monthRange) {
+      return res.status(400).json({
+        success: false,
+        message: "Month parameter is required"
+      });
+    }
+
+    const familyId = req.user?.familyId;
+    if (!familyId) {
+      return res.status(403).json({
+        success: false,
+        message: "Family ID is required"
+      });
+    }
+
+    const { year, month, monthKey, startDate, endDate } = monthRange;
+
+    // Get previous month's start and end dates
+    const prevMonthDate = new Date(Date.UTC(year, month - 2, 1));
+    const prevMonthStart = new Date(Date.UTC(prevMonthDate.getUTCFullYear(), prevMonthDate.getUTCMonth(), 1));
+    const prevMonthEnd = new Date(Date.UTC(prevMonthDate.getUTCFullYear(), prevMonthDate.getUTCMonth() + 1, 0, 23, 59, 59, 999));
+
+    // Get last 3 months for average calculation (including current month)
+    const threeMonthsAgoDate = new Date(Date.UTC(year, month - 3, 1));
+    const threeMonthsStart = new Date(Date.UTC(threeMonthsAgoDate.getUTCFullYear(), threeMonthsAgoDate.getUTCMonth(), 1));
+
+    // Get current month expenses
+    const currentMonthExpenses = await Expense.aggregate([
+      {
+        $match: {
+          familyId: new mongoose.Types.ObjectId(familyId),
+          date: { $gte: startDate, $lte: endDate }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" },
+          count: { $sum: 1 },
+          maxExpense: { $max: "$amount" }
+        }
+      }
+    ]);
+
+    const currentTotal = currentMonthExpenses[0]?.total || 0;
+    const currentCount = currentMonthExpenses[0]?.count || 0;
+
+    // Get previous month expenses
+    const prevMonthExpenses = await Expense.aggregate([
+      {
+        $match: {
+          familyId: new mongoose.Types.ObjectId(familyId),
+          date: { $gte: prevMonthStart, $lte: prevMonthEnd }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" }
+        }
+      }
+    ]);
+
+    const prevTotal = prevMonthExpenses[0]?.total || 0;
+
+    // Calculate percentage change month-over-month
+    const expenseChangePercentage = prevTotal === 0 
+      ? (currentTotal === 0 ? 0 : 100)
+      : Math.round(((currentTotal - prevTotal) / prevTotal) * 1000) / 10;
+
+    // Get last 3 months expenses for average calculation
+    const threeMonthsExpenses = await Expense.aggregate([
+      {
+        $match: {
+          familyId: new mongoose.Types.ObjectId(familyId),
+          date: { $gte: threeMonthsStart, $lte: endDate }
+        }
+      },
+      {
+        $group: {
+          _id: { year: { $year: "$date" }, month: { $month: "$date" } },
+          total: { $sum: "$amount" }
+        }
+      },
+      { $sort: { "_id.year": 1, "_id.month": 1 } }
+    ]);
+
+    const threeMonthsTotals = threeMonthsExpenses.map(item => item.total);
+    const averageMonthlyExpense = threeMonthsTotals.length > 0 
+      ? Math.round((threeMonthsTotals.reduce((a, b) => a + b, 0) / threeMonthsTotals.length) * 100) / 100
+      : 0;
+
+    // Get previous 3-month average (6 months back to 3 months back)
+    const sixMonthsAgoDate = new Date(Date.UTC(year, month - 6, 1));
+    const sixMonthsStart = new Date(Date.UTC(sixMonthsAgoDate.getUTCFullYear(), sixMonthsAgoDate.getUTCMonth(), 1));
+    const threeMonthsBeforeStart = new Date(Date.UTC(prevMonthDate.getUTCFullYear(), prevMonthDate.getUTCMonth() - 2, 1));
+
+    const prevThreeMonthsExpenses = await Expense.aggregate([
+      {
+        $match: {
+          familyId: new mongoose.Types.ObjectId(familyId),
+          date: { $gte: threeMonthsBeforeStart, $lte: prevMonthEnd }
+        }
+      },
+      {
+        $group: {
+          _id: { year: { $year: "$date" }, month: { $month: "$date" } },
+          total: { $sum: "$amount" }
+        }
+      },
+      { $sort: { "_id.year": 1, "_id.month": 1 } }
+    ]);
+
+    const prevThreeMonthsTotals = prevThreeMonthsExpenses.map(item => item.total);
+    const prevThreeMonthsAverage = prevThreeMonthsTotals.length > 0 
+      ? prevThreeMonthsTotals.reduce((a, b) => a + b, 0) / prevThreeMonthsTotals.length
+      : 0;
+
+    const averageChangePercentage = prevThreeMonthsAverage === 0 
+      ? (averageMonthlyExpense === 0 ? 0 : 100)
+      : Math.round(((averageMonthlyExpense - prevThreeMonthsAverage) / prevThreeMonthsAverage) * 1000) / 10;
+
+    // Get highest expense
+    const highestExpenseDoc = await Expense.findOne({
+      familyId: new mongoose.Types.ObjectId(familyId),
+      date: { $gte: startDate, $lte: endDate }
+    }).sort({ amount: -1 }).lean();
+
+    const highestExpense = highestExpenseDoc ? {
+      amount: highestExpenseDoc.amount,
+      category: highestExpenseDoc.category || "Unknown",
+      date: highestExpenseDoc.date
+    } : {
+      amount: 0,
+      category: "N/A",
+      date: null
+    };
+
+    // Get all 12 months for the selected year
+    const yearStartDate = new Date(Date.UTC(year, 0, 1));
+    const yearEndDate = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999));
+    const yearExpenses = await Expense.aggregate([
+      {
+        $match: {
+          familyId: new mongoose.Types.ObjectId(familyId),
+          date: { $gte: yearStartDate, $lte: yearEndDate }
+        }
+      },
+      {
+        $group: {
+          _id: { month: { $month: "$date" } },
+          total: { $sum: "$amount" },
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { "_id.month": 1 } }
+    ]);
+
+    const monthlyTrendMap = new Map();
+    yearExpenses.forEach((item) => {
+      monthlyTrendMap.set(item._id.month, {
+        expense: item.total || 0,
+        transactions: item.count || 0
+      });
+    });
+
+    const monthlyTrend = MONTH_LABELS.map((label, idx) => {
+      const trendData = monthlyTrendMap.get(idx + 1) || { expense: 0, transactions: 0 };
+      return {
+        month: label,
+        expense: trendData.expense,
+        transactions: trendData.transactions
+      };
+    });
+
+    // Get category breakdown for current month
+    const categoryBreakdown = await Expense.aggregate([
+      {
+        $match: {
+          familyId: new mongoose.Types.ObjectId(familyId),
+          date: { $gte: startDate, $lte: endDate }
+        }
+      },
+      {
+        $group: {
+          _id: "$category",
+          amount: { $sum: "$amount" }
+        }
+      },
+      { $sort: { amount: -1 } }
+    ]);
+
+    const categoryBreakdownData = categoryBreakdown.map(item => ({
+      category: item._id || "Uncategorized",
+      amount: item.amount || 0,
+      percentage: currentTotal > 0 ? Math.round((item.amount / currentTotal) * 100 * 100) / 100 : 0
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        summary: {
+          totalExpenses: currentTotal,
+          expenseChangePercentage,
+          averageMonthlyExpense,
+          averageChangePercentage,
+          highestExpense,
+          totalTransactions: currentCount
+        },
+        monthlyTrend,
+        categoryBreakdown: categoryBreakdownData
+      }
+    });
+  } catch (error) {
+    console.error("Error in getExpenseDashboard:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch expense dashboard"
+    });
   }
 };

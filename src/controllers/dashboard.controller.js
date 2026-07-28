@@ -75,6 +75,19 @@ exports.getDashboardSummary = async (req, res) => {
       monthlySubcategoryMap.set(key, subcategoryList);
     });
 
+    const getPreviousMonthKey = (year, month) => {
+      const date = new Date(Date.UTC(year, month - 1, 1));
+      date.setUTCMonth(date.getUTCMonth() - 1);
+      return toMonthKey(date.getUTCFullYear(), date.getUTCMonth() + 1);
+    };
+
+    const getPercentChange = (previous, current) => {
+      if (previous === 0) {
+        return current === 0 ? 0 : 100;
+      }
+      return Math.round(((current - previous) / previous) * 1000) / 10;
+    };
+
     const monthKeys = monthRange
       ? new Set([monthRange.monthKey])
       : new Set([...monthlyIncomeMap.keys(), ...monthlyExpensesMap.keys()]);
@@ -83,10 +96,15 @@ exports.getDashboardSummary = async (req, res) => {
       .sort()
       .map((key) => {
         const [year, monthString] = key.split("-");
-        const monthIndex = Number(monthString) - 1;
         const income = monthlyIncomeMap.get(key) || 0;
         const expense = monthlyExpensesMap.get(key) || 0;
         const balance = income - expense;
+
+        const prevKey = getPreviousMonthKey(Number(year), Number(monthString));
+        const previousIncome = monthlyIncomeMap.get(prevKey) || 0;
+        const previousExpense = monthlyExpensesMap.get(prevKey) || 0;
+        const previousSavings = previousIncome - previousExpense;
+        const previousBalance = previousSavings;
 
         const categories = (monthlySubcategoryMap.get(key) || [])
           .filter((item) => item.amount > 0)
@@ -103,17 +121,51 @@ exports.getDashboardSummary = async (req, res) => {
             }))
           : [];
 
+        const incomeDiff = income - previousIncome;
+        const expenseDiff = expense - previousExpense;
+        const savingsDiff = balance - previousSavings;
+        const balanceDiff = balance - previousBalance;
+
         return {
-          month: `${MONTH_LABELS[monthIndex]} ${year}`,
+          month: key,
           income,
           expense,
           savings: balance,
           balance,
-          breakdown
+          breakdown,
+          previousMonth: {
+            income: previousIncome,
+            expense: previousExpense,
+            savings: previousSavings,
+            balance: previousBalance
+          },
+          diffs: {
+            incomeDiff,
+            expenseDiff,
+            savingsDiff,
+            balanceDiff
+          },
+          changes: {
+              income: getPercentChange(previousIncome, income),
+              expense: getPercentChange(previousExpense, expense),
+              savings: getPercentChange(previousSavings, balance),
+              balance: getPercentChange(previousBalance, balance)
+            }
         };
       });
 
-    res.json({ monthlySummary });
+      // Build monthlyExpenses array for the requested year (or current year)
+      const yearForMonthly = monthRange ? monthRange.year : new Date().getFullYear();
+      const monthlyExpenses = MONTH_LABELS.map((label, idx) => {
+        const key = toMonthKey(yearForMonthly, idx + 1);
+        return {
+          month: label,
+          expenses: monthlyExpensesMap.get(key) || 0,
+          income: monthlyIncomeMap.get(key) || 0
+        };
+      });
+
+      res.json({ monthlySummary, monthlyExpenses });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Failed to fetch dashboard summary" });
@@ -165,19 +217,38 @@ exports.getMonthlyExpenses = async (req, res) => {
     const startOfYear = new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0));
     const endOfYear = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999));
 
-    const agg = await Expense.aggregate([
+    const expenseAgg = await Expense.aggregate([
       { $match: { date: { $gte: startOfYear, $lte: endOfYear } } },
       { $group: { _id: { month: { $month: "$date" } }, total: { $sum: "$amount" } } },
       { $project: { _id: 0, month: "$_id.month", total: 1 } }
     ]);
 
-    // Prepare array for all 12 months (ensure months with 0 are present)
-    const totals = new Array(12).fill(0);
-    agg.forEach((item) => {
-      if (item.month >= 1 && item.month <= 12) totals[item.month - 1] = item.total;
+    const incomeAgg = await Income.aggregate([
+      { $match: { date: { $gte: startOfYear, $lte: endOfYear } } },
+      { $group: { _id: { month: { $month: "$date" } }, total: { $sum: "$amount" } } },
+      { $project: { _id: 0, month: "$_id.month", total: 1 } }
+    ]);
+
+    const expenseTotals = new Array(12).fill(0);
+    expenseAgg.forEach((item) => {
+      if (item.month >= 1 && item.month <= 12) expenseTotals[item.month - 1] = item.total;
     });
 
-    const monthlyExpenses = totals.map((amount, idx) => ({ month: MONTH_LABELS[idx], amount }));
+    const incomeTotals = new Array(12).fill(0);
+    incomeAgg.forEach((item) => {
+      if (item.month >= 1 && item.month <= 12) incomeTotals[item.month - 1] = item.total;
+    });
+
+    const monthlyExpenses = MONTH_LABELS.map((month, idx) => {
+      const expense = expenseTotals[idx] || 0;
+      const income = incomeTotals[idx] || 0;
+      return {
+        month,
+        expenses: expense,
+        income,
+        savings: income - expense
+      };
+    });
 
     res.json({ year, monthlyExpenses });
   } catch (error) {

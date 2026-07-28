@@ -10,8 +10,56 @@ exports.getIncomes = async (req, res) => {
     if (monthRange && monthRange.startDate && monthRange.endDate) {
       match.date = { $gte: monthRange.startDate, $lte: monthRange.endDate };
     }
-    const incomes = await Income.find(match).sort({ date: -1 });
-    res.json(incomes);
+    const incomes = await Income.find(match).sort({ date: -1 }).populate("createdBy", "name").lean();
+
+    // totalIncome = sum of all incomes in current month (from returned incomes)
+    const currentMonthTotal = incomes.reduce((sum, inc) => sum + (inc.amount || 0), 0);
+    const totalIncome = Math.round(currentMonthTotal * 100) / 100;
+
+    const currentMonthExpenseAgg = await Expense.aggregate([
+      { $match: { date: { $gte: monthRange.startDate, $lte: monthRange.endDate } } },
+      { $group: { _id: null, total: { $sum: "$amount" } } },
+      { $project: { _id: 0, total: 1 } }
+    ]);
+    const currentMonthExpense = currentMonthExpenseAgg.length ? currentMonthExpenseAgg[0].total : 0;
+    const currentMonthSavings = Math.round((totalIncome - currentMonthExpense) * 100) / 100;
+
+    // For yearly/monthly based stats, use current year (or monthRange.year if present)
+    const yearForStats = monthRange && monthRange.year ? monthRange.year : new Date().getFullYear();
+    const startOfYear = new Date(Date.UTC(yearForStats, 0, 1, 0, 0, 0, 0));
+    const endOfYear = new Date(Date.UTC(yearForStats, 11, 31, 23, 59, 59, 999));
+
+    const monthlyAgg = await Income.aggregate([
+      { $match: { date: { $gte: startOfYear, $lte: endOfYear } } },
+      { $group: { _id: { month: { $month: "$date" } }, total: { $sum: "$amount" } } },
+      { $project: { _id: 0, month: "$_id.month", total: 1 } }
+    ]);
+
+    const monthlyTotals = new Array(12).fill(0);
+    monthlyAgg.forEach((m) => {
+      if (m.month >= 1 && m.month <= 12) monthlyTotals[m.month - 1] = m.total;
+    });
+
+    const yearlyTotal = Math.round(monthlyTotals.reduce((s, v) => s + v, 0) * 100) / 100;
+    const averageIncome = Math.round((yearlyTotal / 12) * 100) / 100; // average per month across 12 months
+    const highestIncome = Math.round(Math.max(...monthlyTotals) * 100) / 100; // highest monthly total
+
+    // highestEntry = largest single income record in the returned set
+    const highestEntry = incomes.reduce((max, inc) => Math.max(max, inc.amount || 0), 0);
+    const incomeSourcesCount = new Set(incomes.map((inc) => inc.source)).size;
+
+    res.json({
+      incomes,
+      stats: {
+        totalIncome,
+        averageIncome,
+        highestIncome,
+        highestEntry,
+        incomeSourcesCount,
+        currentMonthExpense: Math.round(currentMonthExpense * 100) / 100,
+        currentMonthSavings
+      }
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Failed to fetch incomes" });
@@ -30,15 +78,16 @@ exports.createIncome = async (req, res) => {
 
     const payload = { amount, source, date: new Date(date), notes };
     if (req.user && req.user.familyId) payload.familyId = req.user.familyId;
-    if (req.user && req.user.id) payload.createdBy = req.user.id;
+    if (req.user && (req.user.id || req.user._id)) payload.createdBy = req.user.id || req.user._id;
 
-    const income = await Income.create(payload);
+    const createdIncome = await Income.create(payload);
+    const income = await Income.findById(createdIncome._id).populate("createdBy", "name").lean();
 
     if (payload.familyId) {
       const actor = { id: req.user ? req.user.id : null, name: req.user ? req.user.name : null };
       socketService.emitToFamily(payload.familyId, "income-created", { data: income, actor });
       const msg = makeActivityMessage(req.user ? req.user.name : "Someone", "added", source, amount);
-      socketService.emitToFamily(payload.familyId, "activity-created", { message: msg, meta: { type: "income", incomeId: income._id }, actor });
+      socketService.emitToFamily(payload.familyId, "activity-created", { message: msg, meta: { type: "income", incomeId: createdIncome._id }, actor });
     }
 
     res.status(201).json(income);
@@ -53,7 +102,7 @@ exports.updateIncome = async (req, res) => {
     const { id } = req.params;
     const updatedIncome = await Income.findByIdAndUpdate(id, req.body, {
       new: true
-    });
+    }).populate("createdBy", "name");
 
     if (!updatedIncome) {
       return res.status(404).json({ message: "Income not found" });

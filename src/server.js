@@ -13,6 +13,9 @@ const financialRoutes = require("./routes/financial.routes");
 const budgetRoutes = require("./routes/budget.routes");
 const familyRoutes = require("./routes/family.routes");
 const notificationRoutes = require("./routes/notification.routes");
+const billRoutes = require("./routes/bill.routes");
+const reminderRoutes = require("./routes/reminder.routes");
+const investmentRoutes = require("./routes/investment.routes");
 const { getDashboardSummary, getRecentTransactions } = require("./controllers/dashboard.controller");
 
 dotenv.config();
@@ -43,8 +46,12 @@ app.use("/api/financial", financialRoutes);
 app.use("/api/budgets", budgetRoutes);
 app.use("/api/family", familyRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/bills", billRoutes);
+app.use("/api/reminders", reminderRoutes);
+app.use("/api/investments", investmentRoutes);
 const socketRoutes = require("./routes/socket.routes");
 const { startNotificationJobs } = require("./jobs/notificationJobs");
+const { startInvestmentJobs } = require("./jobs/investmentJobs");
 app.use("/api/socket", socketRoutes);
 app.get("/api/summary", getDashboardSummary);
 app.get("/api/recent", getRecentTransactions);
@@ -54,6 +61,7 @@ app.get("/", (req, res) => {
 });
 
 startNotificationJobs();
+startInvestmentJobs();
 
 const PORT = process.env.PORT || 5000;
 

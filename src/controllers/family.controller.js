@@ -44,8 +44,39 @@ exports.getFamily = async (req, res) => {
     if (!membership) return res.status(403).json({ success: false, error: "Not a family member", code: "FORBIDDEN" });
     const family = await Family.findById(familyId).lean();
     if (!family) return res.status(404).json({ success: false, error: "Family not found", code: "NOT_FOUND" });
-    const members = await FamilyMember.find({ familyId }).populate("userId", "name email");
-    return res.json({ success: true, data: { family, members } });
+    const members = await FamilyMember.find({ familyId }).populate("userId", "name email").lean();
+
+    // fetch pending invitations and combine with joined member events as recent activities
+    const invitations = await Invitation.find({ familyId }).lean();
+
+    const inviteActivities = invitations.map((inv) => ({
+      type: "invitation",
+      email: inv.email,
+      invitationCode: inv.invitationCode,
+      sendTime: inv.createdAt,
+      expiresAt: inv.expiresAt,
+      status: inv.expiresAt && new Date(inv.expiresAt) > new Date() ? "pending" : "expired",
+    }));
+
+    const joinedActivities = members
+      .filter((m) => m.userId)
+      .map((m) => ({
+        type: "joined",
+        userId: m.userId._id || m.userId,
+        name: m.userId.name,
+        email: m.userId.email,
+        role: m.role,
+        joinedAt: m.joinedAt,
+        status: "joined",
+      }));
+
+    const recentActivities = [...inviteActivities, ...joinedActivities].sort((a, b) => {
+      const ta = new Date(a.sendTime || a.joinedAt || 0).getTime();
+      const tb = new Date(b.sendTime || b.joinedAt || 0).getTime();
+      return tb - ta;
+    });
+
+    return res.json({ success: true, data: { family, members, recentActivities } });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ success: false, error: "Server error", code: "SERVER_ERROR" });

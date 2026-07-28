@@ -3,7 +3,10 @@ const User = require("../models/User");
 const Expense = require("../models/Expense");
 const Income = require("../models/Income");
 const Budget = require("../models/Budget");
+const Bill = require("../models/Bill");
+const Reminder = require("../models/Reminder");
 const NotificationToken = require("../models/NotificationToken");
+const socketService = require("../services/socketService");
 const { sendNotification } = require("../services/notification.service");
 
 const getTodayRange = () => {
@@ -149,6 +152,42 @@ const sendBudgetAlerts = async () => {
   }
 };
 
+const getFamilyTokens = async (familyId) => {
+  const userIds = await User.find({ familyId }).distinct("_id");
+  return NotificationToken.find({ userId: { $in: userIds } }).distinct("token");
+};
+
+const sendBillReminders = async () => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  const reminders = await Reminder.find({}).populate("billId", "title dueDate status familyId").lean();
+  for (const reminder of reminders) {
+    const bill = reminder.billId;
+    if (!bill || !bill.dueDate || bill.status === "paid") continue;
+    const reminderDate = new Date(bill.dueDate);
+    reminderDate.setDate(reminderDate.getDate() - Number(reminder.daysBefore || 0));
+    reminderDate.setHours(0, 0, 0, 0);
+    if (reminderDate.getTime() !== today.getTime()) continue;
+    if (!reminder.pushEnabled && reminder.reminderType !== "push" && reminder.reminderType !== "all") continue;
+
+    const tokens = await getFamilyTokens(bill.familyId);
+    if (!tokens.length) continue;
+    const title = "Bill Reminder";
+    const body = `Reminder: ${bill.title} is due on ${new Date(bill.dueDate).toLocaleDateString()}.`;
+    await sendNotification(tokens, title, body, { billId: bill._id.toString(), reminderId: reminder._id.toString() });
+    socketService.emitToFamily(bill.familyId, "billReminder", {
+      billId: bill._id,
+      reminderId: reminder._id,
+      title,
+      body,
+      dueDate: bill.dueDate
+    });
+  }
+};
+
 const startNotificationJobs = () => {
   cron.schedule("0 20 * * *", async () => {
     try {
@@ -163,6 +202,14 @@ const startNotificationJobs = () => {
       await sendWeeklySummary();
     } catch (error) {
       console.error("Weekly summary job failed:", error);
+    }
+  });
+
+  cron.schedule("0 8 * * *", async () => {
+    try {
+      await sendBillReminders();
+    } catch (error) {
+      console.error("Bill reminder job failed:", error);
     }
   });
 
