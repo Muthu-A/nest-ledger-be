@@ -3,6 +3,8 @@ const Bill = require("../models/Bill");
 const Payment = require("../models/Payment");
 const Reminder = require("../models/Reminder");
 const socketService = require("../services/socketService");
+const { generateRecurringBills } = require("../services/billCarryForward.service");
+const { getCurrentMonth } = require("../utils/dateUtils");
 
 const getBillStatus = (dueDate) => {
   const now = new Date();
@@ -97,12 +99,34 @@ const getBills = async (req, res) => {
     if (!requireFamilyContext(req, res)) return;
     const { status, startDate, endDate } = req.query;
     const filter = { familyId: req.user.familyId };
+    const now = new Date();
+    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const isDefaultList = !status && !startDate && !endDate;
+
     // Don't filter by status in DB query - we'll compute it dynamically
     if (startDate || endDate) {
       filter.dueDate = {};
       if (startDate) filter.dueDate.$gte = new Date(startDate);
       if (endDate) filter.dueDate.$lte = new Date(endDate);
     }
+
+    // Ensure current-month recurring bills exist when relevant
+    try {
+      const coversCurrentMonth =
+        isDefaultList ||
+        (startDate && new Date(startDate).toISOString().slice(0,7) === getCurrentMonth()) ||
+        (endDate && new Date(endDate).toISOString().slice(0,7) === getCurrentMonth());
+      if (coversCurrentMonth) {
+        await generateRecurringBills();
+      }
+    } catch (err) {
+      console.error('[Bill] generateRecurringBills error', err);
+    }
+
+    if (isDefaultList) {
+      filter.dueDate = { $gte: currentMonthStart };
+    }
+
     let bills = await Bill.find(filter).sort({ dueDate: 1 }).lean();
     
     // Compute dynamic status and filter if needed
@@ -304,6 +328,7 @@ const getBillDashboard = async (req, res) => {
     const now = new Date();
     const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     const next30Days = new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
 
     const [upcomingBillsCount, autoPayCount, overdueCount, categorySummary, calendarBills, paymentsThisMonth] = await Promise.all([
       Bill.countDocuments({ familyId: familyObjectId, dueDate: { $gte: today }, status: { $in: ["upcoming", "skipped"] } }),
@@ -314,13 +339,13 @@ const getBillDashboard = async (req, res) => {
         { $group: { _id: "$category", amount: { $sum: "$amount" } } },
         { $sort: { amount: -1 } }
       ]),
-      Bill.find({ familyId: familyObjectId, dueDate: { $lte: next30Days } }).sort({ dueDate: 1 }).lean(),
+      Bill.find({ familyId: familyObjectId, dueDate: { $gte: today, $lte: next30Days } }).sort({ dueDate: 1 }).lean(),
       Payment.aggregate([
         {
           $match: {
             familyId: familyObjectId,
             paidDate: {
-              $gte: new Date(today.getFullYear(), today.getMonth(), 1),
+              $gte: currentMonthStart,
               $lte: new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999)
             }
           }
@@ -338,7 +363,13 @@ const getBillDashboard = async (req, res) => {
     const totalDue = totalDueResult[0]?.totalDue || 0;
     const paidThisMonth = paymentsThisMonth[0]?.totalPaid || 0;
 
-    const recentPaidBills = await Payment.find({ familyId: familyObjectId })
+    const recentPaidBills = await Payment.find({
+      familyId: familyObjectId,
+      paidDate: {
+        $gte: currentMonthStart,
+        $lte: new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999)
+      }
+    })
       .sort({ paidDate: -1 })
       .limit(5)
       .populate("billId", "title")

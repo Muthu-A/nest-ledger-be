@@ -18,35 +18,37 @@ const sendInvestmentReminders = async () => {
           userId: investment.userId._id
         }).distinct("token");
 
-        if (tokens.length === 0) {
-          continue;
-        }
-
-        // Send notification
         const title = "Investment Reminder";
         const body = `Reminder: ${investment.investmentName} - ${investment.frequency} investment due today. Amount: ₹${investment.amountInvested}`;
 
-        await sendNotification(tokens, title, body, {
-          investmentId: investment._id.toString(),
-          type: "investment_reminder"
-        });
+        if (tokens.length > 0) {
+          await sendNotification(tokens, title, body, {
+            investmentId: investment._id.toString(),
+            type: "investment_reminder"
+          });
 
-        // Emit socket event
-        socketService.emitToFamily(
-          investment.familyId.toString(),
-          "investment:reminder",
-          {
-            investment: {
-              _id: investment._id,
-              investmentName: investment.investmentName,
-              amountInvested: investment.amountInvested,
-              frequency: investment.frequency
-            },
-            message: `Reminder: ${investment.investmentName} investment due today`
-          }
-        );
+          // Emit socket event
+          socketService.emitToFamily(
+            investment.familyId.toString(),
+            "investment:reminder",
+            {
+              investment: {
+                _id: investment._id,
+                investmentName: investment.investmentName,
+                amountInvested: investment.amountInvested,
+                frequency: investment.frequency
+              },
+              message: `Reminder: ${investment.investmentName} investment due today`
+            }
+          );
 
-        console.log(`Investment reminder sent for: ${investment.investmentName}`);
+          console.log(`Investment reminder sent for: ${investment.investmentName}`);
+        } else {
+          console.log(`No notification tokens for investment ${investment._id}. Advancing reminder date without sending push.`);
+        }
+
+        const nextReminderDate = await investmentService.advanceInvestmentReminder(investment);
+        console.log(`Advanced reminder for ${investment._id} to ${nextReminderDate || "none"}`);
       } catch (error) {
         console.error(`Failed to send reminder for investment ${investment._id}:`, error);
       }

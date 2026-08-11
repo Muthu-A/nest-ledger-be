@@ -13,15 +13,29 @@ function broadcastOnlineMembers(familyId) {
   socketService.emitToFamily(familyId, "family-online-members", members);
 }
 
+async function broadcastOnlineMembersWithDetails(familyId) {
+  try {
+    const members = await socketService.getOnlineMembersWithDetails(familyId);
+    socketService.emitToFamily(familyId, "family-online-members", members);
+  } catch (err) {
+    console.error('[socketEvents] broadcastOnlineMembersWithDetails error', err);
+  }
+}
+
 function registerSocketHandlers(socket) {
   const { id: socketId, user } = socket;
 
   // Auto-join family room if user has familyId
+  // Track global sockets for the user (so we can target emits even before family join)
+  if (user && user.id) {
+    socketService.addGlobalSocket(user.id, socketId);
+  }
+
   if (user && user.familyId) {
     const room = `family_${user.familyId}`;
     socket.join(room);
     socketService.addSocket(user.familyId, user.id, socketId);
-    broadcastOnlineMembers(user.familyId);
+    broadcastOnlineMembersWithDetails(user.familyId);
   }
 
   socket.on("join-family", (payload = {}, cb) => {
@@ -35,7 +49,7 @@ function registerSocketHandlers(socket) {
       const room = `family_${familyId}`;
       socket.join(room);
       socketService.addSocket(familyId, socket.user.id, socketId);
-      broadcastOnlineMembers(familyId);
+      broadcastOnlineMembersWithDetails(familyId);
       cb && cb({ ok: true });
     } catch (err) {
       console.error("join-family error", err);
@@ -50,7 +64,7 @@ function registerSocketHandlers(socket) {
       const room = `family_${familyId}`;
       socket.leave(room);
       socketService.removeSocket(familyId, socket.user.id, socketId);
-      broadcastOnlineMembers(familyId);
+      broadcastOnlineMembersWithDetails(familyId);
       cb && cb({ ok: true });
     } catch (err) {
       console.error("leave-family error", err);
@@ -62,7 +76,10 @@ function registerSocketHandlers(socket) {
     try {
       if (socket.user && socket.user.familyId) {
         socketService.removeSocket(socket.user.familyId, socket.user.id, socketId);
-        broadcastOnlineMembers(socket.user.familyId);
+        broadcastOnlineMembersWithDetails(socket.user.familyId);
+      }
+      if (socket.user && socket.user.id) {
+        socketService.removeGlobalSocket(socket.user.id, socketId);
       }
     } catch (err) {
       console.error("disconnect handler error", err);

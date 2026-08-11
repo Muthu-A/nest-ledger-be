@@ -1,4 +1,6 @@
 const Budget = require("../models/Budget");
+const { copyPreviousMonthBudgets } = require("../services/budgetCarryForward.service");
+const { getCurrentMonth } = require("../utils/dateUtils");
 const Expense = require("../models/Expense");
 const Income = require("../models/Income");
 const socketService = require("../services/socketService");
@@ -161,7 +163,17 @@ exports.getBudgetList = async (req, res) => {
       });
     }
 
-    const budgets = await Budget.find({ month });
+    let budgets = await Budget.find({ month });
+
+    // If requesting current month and no budgets exist, attempt to copy from previous month
+    if (month === getCurrentMonth() && (!budgets || budgets.length === 0)) {
+      try {
+        await copyPreviousMonthBudgets();
+        budgets = await Budget.find({ month });
+      } catch (err) {
+        console.error('[Budget] copyPreviousMonthBudgets error', err);
+      }
+    }
 
     // Parse month to get year and month number
     const [year, monthNum] = month.split("-");

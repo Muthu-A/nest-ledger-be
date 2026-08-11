@@ -24,6 +24,8 @@ function initSocket(server, options = {}) {
   io.on("connection", (socket) => {
     try {
       registerSocketHandlers(socket);
+      console.log("Socket connected");
+      
     } catch (err) {
       console.error("connection handler error", err);
       socket.disconnect(true);

@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const dotenv = require("dotenv");
+require("dotenv").config();
 const connectDB = require("./config/db");
 const authRoutes = require("./routes/auth.routes");
 const incomeRoutes = require("./routes/income.routes");
@@ -16,9 +16,12 @@ const notificationRoutes = require("./routes/notification.routes");
 const billRoutes = require("./routes/bill.routes");
 const reminderRoutes = require("./routes/reminder.routes");
 const investmentRoutes = require("./routes/investment.routes");
+const systemRoutes = require("./routes/system.routes");
+const aiInsightsRoutes = require("./aiInsights/routes/aiInsights.routes");
+const financialInsightsRoutes = require("./aiInsights/routes/financialInsights.routes");
+const bugReportRoutes = require("./routes/bugReport.routes");
+const userRoutes = require("./routes/user.routes");
 const { getDashboardSummary, getRecentTransactions } = require("./controllers/dashboard.controller");
-
-dotenv.config();
 
 const http = require("http");
 const app = express();
@@ -49,6 +52,13 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/bills", billRoutes);
 app.use("/api/reminders", reminderRoutes);
 app.use("/api/investments", investmentRoutes);
+app.use("/api/bug-reports", bugReportRoutes);
+app.use("/api/users", userRoutes);
+app.use("/api/system/carry-forward", systemRoutes);
+app.use("/api/ai-insights", aiInsightsRoutes);
+app.use("/api/financial-insights", financialInsightsRoutes);
+app.use("/ai", aiInsightsRoutes);
+app.use("/ai/financial-insights", financialInsightsRoutes);
 const socketRoutes = require("./routes/socket.routes");
 const { startNotificationJobs } = require("./jobs/notificationJobs");
 const { startInvestmentJobs } = require("./jobs/investmentJobs");
@@ -62,6 +72,8 @@ app.get("/", (req, res) => {
 
 startNotificationJobs();
 startInvestmentJobs();
+const { startDailyJob } = require("./jobs/carryForwardJob");
+startDailyJob();
 
 const PORT = process.env.PORT || 5000;
 
