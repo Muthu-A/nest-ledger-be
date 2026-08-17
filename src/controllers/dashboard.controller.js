@@ -1,5 +1,6 @@
 const Income = require("../models/Income");
 const Expense = require("../models/Expense");
+const Loan = require("../models/Loan");
 const { EXPENSE_CATEGORIES, getCategoryInfo } = require("../utils/expenseCategories");
 
 const MONTH_LABELS = [
@@ -75,6 +76,44 @@ exports.getDashboardSummary = async (req, res) => {
       monthlySubcategoryMap.set(key, subcategoryList);
     });
 
+    const loanTotals = await Loan.aggregate([
+      {
+        $project: {
+          type: 1,
+          amount: 1,
+          amountSettled: 1,
+          remaining: { $subtract: ["$amount", { $ifNull: ["$amountSettled", 0] }] }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          pendingLent: {
+            $sum: {
+              $cond: [
+                { $eq: ["$type", "lent"] },
+                { $max: ["$remaining", 0] },
+                0
+              ]
+            }
+          },
+          pendingBorrowed: {
+            $sum: {
+              $cond: [
+                { $eq: ["$type", "borrowed"] },
+                { $max: ["$remaining", 0] },
+                0
+              ]
+            }
+          }
+        }
+      }
+    ]);
+
+    const pendingLent = loanTotals[0]?.pendingLent || 0;
+    const pendingBorrowed = loanTotals[0]?.pendingBorrowed || 0;
+    const loanAdjustment = pendingBorrowed - pendingLent;
+
     const getPreviousMonthKey = (year, month) => {
       const date = new Date(Date.UTC(year, month - 1, 1));
       date.setUTCMonth(date.getUTCMonth() - 1);
@@ -98,13 +137,13 @@ exports.getDashboardSummary = async (req, res) => {
         const [year, monthString] = key.split("-");
         const income = monthlyIncomeMap.get(key) || 0;
         const expense = monthlyExpensesMap.get(key) || 0;
-        const balance = income - expense;
+        const balance = income - expense + loanAdjustment;
 
         const prevKey = getPreviousMonthKey(Number(year), Number(monthString));
         const previousIncome = monthlyIncomeMap.get(prevKey) || 0;
         const previousExpense = monthlyExpensesMap.get(prevKey) || 0;
         const previousSavings = previousIncome - previousExpense;
-        const previousBalance = previousSavings;
+        const previousBalance = previousSavings + loanAdjustment;
 
         const categories = (monthlySubcategoryMap.get(key) || [])
           .filter((item) => item.amount > 0)
@@ -132,6 +171,7 @@ exports.getDashboardSummary = async (req, res) => {
           expense,
           savings: balance,
           balance,
+          loanAdjustment,
           breakdown,
           previousMonth: {
             income: previousIncome,

@@ -20,6 +20,7 @@ const systemRoutes = require("./routes/system.routes");
 const aiInsightsRoutes = require("./aiInsights/routes/aiInsights.routes");
 const financialInsightsRoutes = require("./aiInsights/routes/financialInsights.routes");
 const bugReportRoutes = require("./routes/bugReport.routes");
+const loanRoutes = require("./routes/loan.routes");
 const userRoutes = require("./routes/user.routes");
 const { getDashboardSummary, getRecentTransactions } = require("./controllers/dashboard.controller");
 
@@ -53,6 +54,7 @@ app.use("/api/bills", billRoutes);
 app.use("/api/reminders", reminderRoutes);
 app.use("/api/investments", investmentRoutes);
 app.use("/api/bug-reports", bugReportRoutes);
+app.use("/api/loans", loanRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/system/carry-forward", systemRoutes);
 app.use("/api/ai-insights", aiInsightsRoutes);
