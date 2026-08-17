@@ -2,10 +2,11 @@ const financialInsightsService = require("../services/financialInsights.service"
 
 async function getFinancialInsights(req, res) {
   try {
-    if (!req.user?.familyId) {
-      return res.status(403).json({ success: false, message: "Family context required" });
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
     }
 
+    // Pass req.user.familyId (may be null for personal context)
     const result = await financialInsightsService.getFinancialInsights(req.user.familyId);
     return res.json({ success: true, data: result });
   } catch (error) {

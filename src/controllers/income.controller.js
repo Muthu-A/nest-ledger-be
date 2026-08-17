@@ -1,12 +1,20 @@
 const Income = require("../models/Income");
 const Expense = require("../models/Expense");
+const FamilyMember = require("../models/FamilyMember");
 const socketService = require("../services/socketService");
 const { makeActivityMessage } = require("../socket/socketEvents");
+const { filterAllowedFields, getFamilyIdAndVerifyOwnership } = require("../utils/validation");
 
 exports.getIncomes = async (req, res) => {
   try {
     const { monthRange } = req;
-    const match = {};
+    
+    const familyId = await getFamilyIdAndVerifyOwnership(req, FamilyMember);
+    if (familyId === undefined) {
+      return res.status(403).json({ message: "Family context required" });
+    }
+    
+    const match = { familyId };
     if (monthRange && monthRange.startDate && monthRange.endDate) {
       match.date = { $gte: monthRange.startDate, $lte: monthRange.endDate };
     }
@@ -17,7 +25,7 @@ exports.getIncomes = async (req, res) => {
     const totalIncome = Math.round(currentMonthTotal * 100) / 100;
 
     const currentMonthExpenseAgg = await Expense.aggregate([
-      { $match: { date: { $gte: monthRange.startDate, $lte: monthRange.endDate } } },
+      { $match: { familyId, date: { $gte: monthRange.startDate, $lte: monthRange.endDate } } },
       { $group: { _id: null, total: { $sum: "$amount" } } },
       { $project: { _id: 0, total: 1 } }
     ]);
@@ -30,7 +38,7 @@ exports.getIncomes = async (req, res) => {
     const endOfYear = new Date(Date.UTC(yearForStats, 11, 31, 23, 59, 59, 999));
 
     const monthlyAgg = await Income.aggregate([
-      { $match: { date: { $gte: startOfYear, $lte: endOfYear } } },
+      { $match: { familyId, date: { $gte: startOfYear, $lte: endOfYear } } },
       { $group: { _id: { month: { $month: "$date" } }, total: { $sum: "$amount" } } },
       { $project: { _id: 0, month: "$_id.month", total: 1 } }
     ]);
@@ -100,16 +108,39 @@ exports.createIncome = async (req, res) => {
 exports.updateIncome = async (req, res) => {
   try {
     const { id } = req.params;
-    const updatedIncome = await Income.findByIdAndUpdate(id, req.body, {
-      new: true
-    }).populate("createdBy", "name");
+    
+    const familyId = await getFamilyIdAndVerifyOwnership(req, FamilyMember);
+    if (familyId === undefined) {
+      return res.status(403).json({ message: "Family context required" });
+    }
+
+    // Only allow specific fields to be updated
+    const allowedFields = ['amount', 'source', 'date', 'notes'];
+    const updateData = {};
+    
+    allowedFields.forEach(field => {
+      if (field in req.body) {
+        updateData[field] = req.body[field];
+      }
+    });
+
+    // Special handling for date field
+    if (updateData.date) {
+      updateData.date = new Date(updateData.date);
+    }
+
+    // Verify ownership: the income must belong to the user's family
+    const updatedIncome = await Income.findOneAndUpdate(
+      { _id: id, familyId },
+      updateData,
+      { new: true }
+    ).populate("createdBy", "name");
 
     if (!updatedIncome) {
       return res.status(404).json({ message: "Income not found" });
     }
 
     // emit
-    const familyId = (req.user && req.user.familyId) || updatedIncome.familyId;
     if (familyId) {
       const actor = { id: req.user ? req.user.id : null, name: req.user ? req.user.name : null };
       socketService.emitToFamily(familyId, "income-updated", { data: updatedIncome, actor });
@@ -127,7 +158,14 @@ exports.updateIncome = async (req, res) => {
 exports.deleteIncome = async (req, res) => {
   try {
     const { id } = req.params;
-    const deletedIncome = await Income.findByIdAndDelete(id);
+    
+    if (!req.user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    // allow null req.user.familyId (personal context)
+
+    // Verify ownership: only delete income belonging to user's family
+    const deletedIncome = await Income.findOneAndDelete({ _id: id, familyId: req.user.familyId });
 
     if (!deletedIncome) {
       return res.status(404).json({ message: "Income not found" });
@@ -138,8 +176,9 @@ exports.deleteIncome = async (req, res) => {
     const month = incomeDate.getMonth() + 1;
     const year = incomeDate.getFullYear();
 
-    // Check if there are any remaining incomes for that month
+    // Check if there are any remaining incomes for that month in the same family
     const remainingIncomes = await Income.countDocuments({
+      familyId: req.user.familyId,
       $expr: {
         $and: [
           { $eq: [{ $year: "$date" }, year] },
@@ -148,9 +187,10 @@ exports.deleteIncome = async (req, res) => {
       }
     });
 
-    // If no incomes remain for that month, delete all expenses for that month
+    // If no incomes remain for that month, delete all expenses for that month in the same family
     if (remainingIncomes === 0) {
       await Expense.deleteMany({
+        familyId: req.user.familyId,
         $expr: {
           $and: [
             { $eq: [{ $year: "$date" }, year] },

@@ -29,10 +29,33 @@ const app = express();
 
 app.use(
   cors({
-    origin: "*",
+    origin: process.env.CLIENT_ORIGIN || "http://localhost:5173",
+    credentials: true,
   })
 );
-app.use(express.json());
+
+// Security headers
+app.use((req, res, next) => {
+  // Prevent clickjacking
+  res.setHeader("X-Frame-Options", "DENY");
+  
+  // Prevent MIME type sniffing
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  
+  // Enable XSS protection in older browsers
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  
+  // Prevent referrer leakage
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  
+  // Content security policy
+  res.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'");
+  
+  next();
+});
+
+// Limit request body size to prevent DoS
+app.use(express.json({ limit: "1mb" }));
 
 const monthMiddleware = require("./middlewares/month.middleware");
 app.use(monthMiddleware);
@@ -70,6 +93,29 @@ app.get("/api/recent", getRecentTransactions);
 
 app.get("/", (req, res) => {
   res.send("Family Budget API Running");
+});
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    error: "Resource not found",
+    code: "NOT_FOUND"
+  });
+});
+
+// Global error handler - must be last middleware
+app.use((err, req, res, next) => {
+  console.error("[Global Error]", err);
+
+  // Do not expose sensitive information in response
+  const status = err.status || err.statusCode || 500;
+  
+  res.status(status).json({
+    success: false,
+    error: status === 500 ? "Internal server error" : err.message,
+    code: "SERVER_ERROR"
+  });
 });
 
 startNotificationJobs();

@@ -73,6 +73,11 @@ exports.updateBudget = async (req, res) => {
   try {
     const { budgetId } = req.params;
     const { budgetAmount } = req.body;
+    
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    // allow null req.user.familyId (personal context)
 
     if (!budgetAmount) {
       return res.status(400).json({
@@ -81,8 +86,8 @@ exports.updateBudget = async (req, res) => {
       });
     }
 
-    const budget = await Budget.findByIdAndUpdate(
-      budgetId,
+    const budget = await Budget.findOneAndUpdate(
+      { _id: budgetId, familyId: req.user.familyId },
       { budgetAmount },
       { new: true }
     );
@@ -95,7 +100,7 @@ exports.updateBudget = async (req, res) => {
     }
 
     // emit
-    const familyId = (req.user && req.user.familyId) || budget.familyId;
+    const familyId = req.user.familyId;
     if (familyId) {
       const actor = { id: req.user ? req.user.id : null, name: req.user ? req.user.name : null };
       socketService.emitToFamily(familyId, "budget-updated", { data: budget, actor });
@@ -120,8 +125,13 @@ exports.updateBudget = async (req, res) => {
 exports.deleteBudget = async (req, res) => {
   try {
     const { budgetId } = req.params;
+    
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    // allow null req.user.familyId (personal context)
 
-    const budget = await Budget.findByIdAndDelete(budgetId);
+    const budget = await Budget.findOneAndDelete({ _id: budgetId, familyId: req.user.familyId });
 
     if (!budget) {
       return res.status(404).json({
@@ -155,6 +165,10 @@ exports.deleteBudget = async (req, res) => {
 exports.getBudgetList = async (req, res) => {
   try {
     const { month } = req.query;
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    // allow null req.user.familyId (personal context)
 
     if (!month) {
       return res.status(400).json({
@@ -163,13 +177,13 @@ exports.getBudgetList = async (req, res) => {
       });
     }
 
-    let budgets = await Budget.find({ month });
+    let budgets = await Budget.find({ month, familyId: req.user.familyId });
 
     // If requesting current month and no budgets exist, attempt to copy from previous month
     if (month === getCurrentMonth() && (!budgets || budgets.length === 0)) {
       try {
         await copyPreviousMonthBudgets();
-        budgets = await Budget.find({ month });
+        budgets = await Budget.find({ month, familyId: req.user.familyId });
       } catch (err) {
         console.error('[Budget] copyPreviousMonthBudgets error', err);
       }
@@ -178,8 +192,8 @@ exports.getBudgetList = async (req, res) => {
     // Parse month to get year and month number
     const [year, monthNum] = month.split("-");
 
-    // Get expenses for this month
-    const expenses = await Expense.find();
+    // Get expenses for this month (filter by familyId)
+    const expenses = await Expense.find({ familyId: req.user.familyId });
     const monthExpenses = expenses.filter((exp) => {
       const expDate = new Date(exp.date);
       const expYear = expDate.getFullYear();
@@ -241,6 +255,11 @@ exports.getBudgetList = async (req, res) => {
 exports.getBudgetSummary = async (req, res) => {
   try {
     const { month } = req.query;
+    
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    // allow null req.user.familyId (personal context)
 
     if (!month) {
       return res.status(400).json({
@@ -252,11 +271,11 @@ exports.getBudgetSummary = async (req, res) => {
     // Parse month
     const [year, monthNum] = month.split("-");
 
-    // Get all budgets for this month
-    const budgets = await Budget.find({ month });
+    // Get all budgets for this month (filter by familyId)
+    const budgets = await Budget.find({ month, familyId: req.user.familyId });
 
-    // Get all incomes for this month
-    const incomes = await Income.find();
+    // Get all incomes for this month (filter by familyId)
+    const incomes = await Income.find({ familyId: req.user.familyId });
     const monthIncomes = incomes.filter((inc) => {
       const incDate = new Date(inc.date);
       const incYear = incDate.getFullYear();
@@ -264,8 +283,8 @@ exports.getBudgetSummary = async (req, res) => {
       return incYear === parseInt(year) && incMonth === monthNum;
     });
 
-    // Get all expenses for this month
-    const expenses = await Expense.find();
+    // Get all expenses for this month (filter by familyId)
+    const expenses = await Expense.find({ familyId: req.user.familyId });
     const monthExpenses = expenses.filter((exp) => {
       const expDate = new Date(exp.date);
       const expYear = expDate.getFullYear();

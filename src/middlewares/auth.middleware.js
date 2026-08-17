@@ -6,7 +6,14 @@ module.exports = async function (req, res, next) {
     const auth = req.headers.authorization;
     if (!auth || !auth.startsWith("Bearer ")) return res.status(401).json({ message: "No token provided" });
     const token = auth.split(" ")[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || "secret");
+    
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+      console.error("CRITICAL: JWT_SECRET is not configured");
+      return res.status(500).json({ success: false, error: "Server misconfiguration", code: "SERVER_ERROR" });
+    }
+    
+    const decoded = jwt.verify(token, jwtSecret);
     const user = await User.findById(decoded.id);
     if (!user) return res.status(401).json({ message: "Invalid token" });
     req.user = user;

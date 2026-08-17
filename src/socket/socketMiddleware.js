@@ -20,7 +20,15 @@ async function socketAuthMiddleware(socket, next) {
       return next(err);
     }
 
-    const decoded = jwt.verify(authToken, process.env.JWT_SECRET || "secret");
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+      console.error("CRITICAL: JWT_SECRET is not configured");
+      const err = new Error("Server misconfiguration");
+      err.data = { code: "SERVER_ERROR" };
+      return next(err);
+    }
+    
+    const decoded = jwt.verify(authToken, jwtSecret);
     const user = await User.findById(decoded.id).select("name email familyId role");
     if (!user) {
       const err = new Error("Unauthorized: Invalid token");

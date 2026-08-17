@@ -1,7 +1,9 @@
 const Goal = require("../models/Goal");
 const Contribution = require("../models/Contribution");
+const FamilyMember = require("../models/FamilyMember");
 const socketService = require("../services/socketService");
 const { makeActivityMessage } = require("../socket/socketEvents");
+const { getFamilyIdAndVerifyOwnership } = require("../utils/validation");
 
 // Create Goal
 exports.createGoal = async (req, res) => {
@@ -55,7 +57,13 @@ exports.createGoal = async (req, res) => {
 // Get All Goals
 exports.getAllGoals = async (req, res) => {
   try {
-    const goals = await Goal.find().sort({ createdAt: -1 });
+    // Get and verify familyId - accepts from user.familyId OR request, but verifies ownership
+    const familyId = await getFamilyIdAndVerifyOwnership(req, FamilyMember);
+    if (familyId === undefined) {
+      return res.status(403).json({ success: false, message: "Family context required" });
+    } // familyId may be null (personal) or a string ObjectId
+    
+    const goals = await Goal.find({ familyId }).sort({ createdAt: -1 });
 
     const goalsWithProgress = goals.map((goal) => {
       const progress = Math.round((goal.currentAmount / goal.targetAmount) * 100);
@@ -91,8 +99,13 @@ exports.getAllGoals = async (req, res) => {
 exports.getGoalDetails = async (req, res) => {
   try {
     const { goalId } = req.params;
+    
+    const familyId = await getFamilyIdAndVerifyOwnership(req, FamilyMember);
+    if (familyId === undefined) {
+      return res.status(403).json({ success: false, message: "Family context required" });
+    } // familyId may be null (personal) or a string ObjectId
 
-    const goal = await Goal.findById(goalId);
+    const goal = await Goal.findOne({ _id: goalId, familyId });
 
     if (!goal) {
       return res.status(404).json({
@@ -133,8 +146,13 @@ exports.updateGoal = async (req, res) => {
   try {
     const { goalId } = req.params;
     const { goalName, targetAmount, targetDate, notes } = req.body;
+    
+    const familyId = await getFamilyIdAndVerifyOwnership(req, FamilyMember);
+    if (familyId === undefined) {
+      return res.status(403).json({ success: false, message: "Family context required" });
+    } // familyId may be null (personal) or a string ObjectId
 
-    const goal = await Goal.findById(goalId);
+    const goal = await Goal.findOne({ _id: goalId, familyId });
 
     if (!goal) {
       return res.status(404).json({
@@ -151,11 +169,11 @@ exports.updateGoal = async (req, res) => {
     await goal.save();
 
     // emit
-    if (req.user && req.user.familyId) {
+    if (familyId) {
       const actor = { id: req.user ? req.user.id : null, name: req.user ? req.user.name : null };
-      socketService.emitToFamily(req.user.familyId, "goal-updated", { data: goal, actor });
+      socketService.emitToFamily(familyId, "goal-updated", { data: goal, actor });
       const msg = makeActivityMessage(req.user ? req.user.name : "Someone", "updated goal", goal.goalName);
-      socketService.emitToFamily(req.user.familyId, "activity-created", { message: msg, meta: { type: "goal", goalId: goal._id }, actor });
+      socketService.emitToFamily(familyId, "activity-created", { message: msg, meta: { type: "goal", goalId: goal._id }, actor });
     }
 
     res.json({
@@ -175,8 +193,13 @@ exports.updateGoal = async (req, res) => {
 exports.deleteGoal = async (req, res) => {
   try {
     const { goalId } = req.params;
+    
+    const familyId = await getFamilyIdAndVerifyOwnership(req, FamilyMember);
+    if (familyId === undefined) {
+      return res.status(403).json({ success: false, message: "Family context required" });
+    } // familyId may be null (personal) or a string ObjectId
 
-    const goal = await Goal.findByIdAndDelete(goalId);
+    const goal = await Goal.findOneAndDelete({ _id: goalId, familyId });
 
     if (!goal) {
       return res.status(404).json({
@@ -188,11 +211,11 @@ exports.deleteGoal = async (req, res) => {
     // Delete all contributions related to this goal
     await Contribution.deleteMany({ goalId });
 
-    if (req.user && req.user.familyId) {
+    if (familyId) {
       const actor = { id: req.user ? req.user.id : null, name: req.user ? req.user.name : null };
-      socketService.emitToFamily(req.user.familyId, "goal-deleted", { id: goal._id, actor });
+      socketService.emitToFamily(familyId, "goal-deleted", { id: goal._id, actor });
       const msg = makeActivityMessage(req.user ? req.user.name : "Someone", "deleted goal", goal.goalName);
-      socketService.emitToFamily(req.user.familyId, "activity-created", { message: msg, meta: { type: "goal", goalId: goal._id }, actor });
+      socketService.emitToFamily(familyId, "activity-created", { message: msg, meta: { type: "goal", goalId: goal._id }, actor });
     }
 
     res.json({

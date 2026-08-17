@@ -23,7 +23,18 @@ const toMonthKey = (year, month) => `${year}-${String(month).padStart(2, "0")}`;
 exports.getDashboardSummary = async (req, res) => {
   try {
     const { monthRange } = req;
+    
+    // Verify family context
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    
+    const familyId = req.user.familyId;
+    
     const incomeData = await Income.aggregate([
+      {
+        $match: { familyId: familyId }
+      },
       {
         $group: {
           _id: {
@@ -36,6 +47,9 @@ exports.getDashboardSummary = async (req, res) => {
     ]);
 
     const expenseData = await Expense.aggregate([
+      {
+        $match: { familyId: familyId }
+      },
       {
         $group: {
           _id: {
@@ -214,10 +228,15 @@ exports.getDashboardSummary = async (req, res) => {
 
 exports.getRecentTransactions = async (req, res) => {
   try {
+    // Verify family context
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    
     // Determine if client explicitly passed a `month` query parameter.
     const monthProvided = (req.originalUrl || req.url || "").includes("month=");
 
-    const filter = {};
+    const filter = { familyId: req.user.familyId };
     if (monthProvided && req.monthRange) {
       filter.date = { $gte: req.monthRange.startDate, $lte: req.monthRange.endDate };
     }
@@ -244,6 +263,11 @@ exports.getRecentTransactions = async (req, res) => {
 // If client supplies `?year=YYYY` the API returns data for that year.
 exports.getMonthlyExpenses = async (req, res) => {
   try {
+    // Verify family context
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    
     const yearParam = req.query.year;
     let year;
 
@@ -258,13 +282,13 @@ exports.getMonthlyExpenses = async (req, res) => {
     const endOfYear = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999));
 
     const expenseAgg = await Expense.aggregate([
-      { $match: { date: { $gte: startOfYear, $lte: endOfYear } } },
+      { $match: { familyId: req.user.familyId, date: { $gte: startOfYear, $lte: endOfYear } } },
       { $group: { _id: { month: { $month: "$date" } }, total: { $sum: "$amount" } } },
       { $project: { _id: 0, month: "$_id.month", total: 1 } }
     ]);
 
     const incomeAgg = await Income.aggregate([
-      { $match: { date: { $gte: startOfYear, $lte: endOfYear } } },
+      { $match: { familyId: req.user.familyId, date: { $gte: startOfYear, $lte: endOfYear } } },
       { $group: { _id: { month: { $month: "$date" } }, total: { $sum: "$amount" } } },
       { $project: { _id: 0, month: "$_id.month", total: 1 } }
     ]);

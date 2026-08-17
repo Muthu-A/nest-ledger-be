@@ -12,10 +12,11 @@ const getBillStatus = (dueDate) => {
 };
 
 const requireFamilyContext = (req, res) => {
-  if (!req.user || !req.user.familyId) {
-    res.status(403).json({ success: false, message: "Family context required" });
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Unauthorized" });
     return false;
   }
+  // allow personal (no familyId) context when user has no family
   return true;
 };
 
@@ -95,13 +96,25 @@ const updateReminder = async (req, res) => {
     if (!requireFamilyContext(req, res)) return;
     if (!requireWriteAccess(req, res)) return;
     const { id } = req.params;
-    const updates = req.body;
+    
+    // Only allow specific fields to be updated
+    const allowedFields = ['reminderType', 'daysBefore', 'reminderTime', 'pushEnabled', 'emailEnabled', 'smsEnabled', 'billId'];
+    const updates = {};
+    
+    allowedFields.forEach(field => {
+      if (field in req.body) {
+        updates[field] = req.body[field];
+      }
+    });
+    
+    // Verify bill ownership if billId is being updated
     if (updates.billId) {
       const bill = await Bill.findOne({ _id: updates.billId, familyId: req.user.familyId });
       if (!bill) {
         return res.status(404).json({ success: false, message: "Bill not found for this family" });
       }
     }
+    
     const reminder = await Reminder.findOneAndUpdate(
       { _id: id, familyId: req.user.familyId },
       { $set: updates },

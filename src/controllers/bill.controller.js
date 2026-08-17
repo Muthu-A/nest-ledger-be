@@ -38,10 +38,11 @@ const addFrequency = (date, frequency) => {
 };
 
 const requireFamilyContext = (req, res) => {
-  if (!req.user || !req.user.familyId) {
-    res.status(403).json({ success: false, message: "Family context required" });
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Unauthorized" });
     return false;
   }
+  // allow personal (no familyId) context when user has no family
   return true;
 };
 
@@ -188,7 +189,7 @@ const createBill = async (req, res) => {
 
     const bill = await Bill.create(payload);
     const actor = { id: req.user._id, name: req.user.name };
-    socketService.emitToFamily(req.user.familyId, "billCreated", { data: bill, actor });
+    if (req.user.familyId) socketService.emitToFamily(req.user.familyId, "billCreated", { data: bill, actor });
     res.status(201).json({ success: true, message: "Bill created", data: bill });
   } catch (error) {
     console.error(error);
@@ -215,7 +216,7 @@ const updateBill = async (req, res) => {
     );
     if (!bill) return res.status(404).json({ success: false, message: "Bill not found" });
     const actor = { id: req.user._id, name: req.user.name };
-    socketService.emitToFamily(req.user.familyId, "billUpdated", { data: bill, actor });
+    if (req.user.familyId) socketService.emitToFamily(req.user.familyId, "billUpdated", { data: bill, actor });
     res.json({ success: true, message: "Bill updated", data: bill });
   } catch (error) {
     console.error(error);
@@ -232,7 +233,7 @@ const deleteBill = async (req, res) => {
     if (!bill) return res.status(404).json({ success: false, message: "Bill not found" });
     await Reminder.deleteMany({ billId: bill._id });
     const actor = { id: req.user._id, name: req.user.name };
-    socketService.emitToFamily(req.user.familyId, "billDeleted", { data: bill, actor });
+    if (req.user.familyId) socketService.emitToFamily(req.user.familyId, "billDeleted", { data: bill, actor });
     res.json({ success: true, message: "Bill deleted" });
   } catch (error) {
     console.error(error);
@@ -261,7 +262,7 @@ const markPaidBill = async (req, res) => {
     bill.status = "paid";
     await bill.save();
     const actor = { id: req.user._id, name: req.user.name };
-    socketService.emitToFamily(req.user.familyId, "billPaid", { data: { bill, payment }, actor });
+    if (req.user.familyId) socketService.emitToFamily(req.user.familyId, "billPaid", { data: { bill, payment }, actor });
     res.json({ success: true, message: "Bill marked paid", data: { bill, payment } });
   } catch (error) {
     console.error(error);
@@ -279,7 +280,7 @@ const skipBill = async (req, res) => {
     bill.status = "skipped";
     await bill.save();
     const actor = { id: req.user._id, name: req.user.name };
-    socketService.emitToFamily(req.user.familyId, "billSkipped", { data: bill, actor });
+    if (req.user.familyId) socketService.emitToFamily(req.user.familyId, "billSkipped", { data: bill, actor });
     res.json({ success: true, message: "Bill skipped", data: bill });
   } catch (error) {
     console.error(error);
@@ -309,7 +310,7 @@ const duplicateBill = async (req, res) => {
       status: getBillStatus(newDueDate)
     });
     const actor = { id: req.user._id, name: req.user.name };
-    socketService.emitToFamily(req.user.familyId, "billCreated", { data: duplicate, actor });
+    if (req.user.familyId) socketService.emitToFamily(req.user.familyId, "billCreated", { data: duplicate, actor });
     res.status(201).json({ success: true, message: "Bill duplicated", data: duplicate });
   } catch (error) {
     console.error(error);
@@ -320,11 +321,15 @@ const duplicateBill = async (req, res) => {
 const getBillDashboard = async (req, res) => {
   try {
     if (!requireFamilyContext(req, res)) return;
-    const familyId = req.user.familyId ? req.user.familyId.toString() : null;
-    if (!familyId || !mongoose.Types.ObjectId.isValid(familyId)) {
-      return res.status(400).json({ success: false, message: "Invalid familyId" });
+    const familyId = req.user.familyId ? String(req.user.familyId) : null;
+    // familyId may be null (personal) or a string ObjectId
+    let familyObjectId = null;
+    if (familyId !== null) {
+      if (!mongoose.Types.ObjectId.isValid(familyId)) {
+        return res.status(400).json({ success: false, message: "Invalid familyId" });
+      }
+      familyObjectId = new mongoose.Types.ObjectId(familyId);
     }
-    const familyObjectId = new mongoose.Types.ObjectId(familyId);
     const now = new Date();
     const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     const next30Days = new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000);

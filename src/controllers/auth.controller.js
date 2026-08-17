@@ -3,7 +3,11 @@ const crypto = require("crypto");
 const User = require("../models/User");
 
 const generateToken = (userId) => {
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET || "secret", {
+  const jwtSecret = process.env.JWT_SECRET;
+  if (!jwtSecret) {
+    throw new Error("JWT_SECRET is not configured");
+  }
+  return jwt.sign({ id: userId }, jwtSecret, {
     expiresIn: "7d",
   });
 };
@@ -21,11 +25,19 @@ exports.signup = async (req, res) => {
   try {
     const { name, email, password } = req.body;
     if (!name || !email || !password) return res.status(400).json({ success: false, error: "Name, email and password are required", code: "VALIDATION_ERROR" });
+    
+    // Validate input lengths
+    if (typeof name !== "string" || name.trim().length === 0 || name.length > 100) {
+      return res.status(400).json({ success: false, error: "Invalid name (must be 1-100 characters)", code: "VALIDATION_ERROR" });
+    }
+    
     if (!validateEmail(email)) return res.status(400).json({ success: false, error: "Invalid email format", code: "INVALID_EMAIL" });
     if (!validatePassword(password)) return res.status(400).json({ success: false, error: "Password must be at least 8 characters", code: "WEAK_PASSWORD" });
+    
     const existing = await User.findOne({ email: email.toLowerCase() });
     if (existing) return res.status(409).json({ success: false, error: "Email already registered", code: "EMAIL_EXISTS" });
-    const user = await User.create({ name, email: email.toLowerCase(), password });
+    
+    const user = await User.create({ name: name.trim(), email: email.toLowerCase(), password });
     const token = generateToken(user._id);
     return res.status(201).json({ success: true, data: { token, user: { id: user._id, email: user.email, name: user.name, familyId: user.familyId || null, role: user.role || null } }, message: "User created" });
   } catch (err) {
@@ -77,16 +89,22 @@ exports.resetPassword = async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ message: "Email and new password required" });
+    if (!validatePassword(password)) return res.status(400).json({ success: false, error: "Password must be at least 8 characters", code: "WEAK_PASSWORD" });
+    
     const user = await User.findOne({ email: email.toLowerCase() });
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) {
+      // Generic response to prevent account enumeration
+      return res.status(200).json({ message: "If that account exists, password has been reset" });
+    }
+    
     user.password = password;
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
     await user.save();
-    res.json({ message: "Password reset successful" });
+    return res.json({ success: true, message: "Password reset successful" });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ success: false, error: "Server error", code: "SERVER_ERROR" });
   }
 };
 

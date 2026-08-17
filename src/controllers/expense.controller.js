@@ -101,12 +101,38 @@ exports.createExpense = async (req, res) => {
 exports.updateExpense = async (req, res) => {
   try {
     const { id } = req.params;
-    const updates = req.body;
-    const expense = await Expense.findByIdAndUpdate(id, updates, { new: true });
+    
+    if (!req.user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    // allow null req.user.familyId (personal context)
+
+    // Only allow specific fields to be updated
+    const allowedFields = ['category', 'subCategory', 'amount', 'date', 'notes'];
+    const updates = {};
+    
+    allowedFields.forEach(field => {
+      if (field in req.body) {
+        updates[field] = req.body[field];
+      }
+    });
+
+    // Special handling for date field
+    if (updates.date) {
+      updates.date = new Date(updates.date);
+    }
+
+    // Verify ownership: expense must belong to user's family
+    const expense = await Expense.findOneAndUpdate(
+      { _id: id, familyId: req.user.familyId },
+      updates,
+      { new: true }
+    );
+    
     if (!expense) return res.status(404).json({ message: "Expense not found" });
 
     // emit
-    const familyId = (req.user && req.user.familyId) || expense.familyId;
+    const familyId = req.user.familyId;
     if (familyId) {
       const actor = { id: req.user ? req.user.id : null, name: req.user ? req.user.name : null };
       socketService.emitToFamily(familyId, "expense-updated", { data: expense, actor });
@@ -124,10 +150,18 @@ exports.updateExpense = async (req, res) => {
 exports.deleteExpense = async (req, res) => {
   try {
     const { id } = req.params;
-    const expense = await Expense.findByIdAndDelete(id);
+    
+    if (!req.user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    // allow null req.user.familyId (personal context)
+
+    // Verify ownership: expense must belong to user's family
+    const expense = await Expense.findOneAndDelete({ _id: id, familyId: req.user.familyId });
+    
     if (!expense) return res.status(404).json({ message: "Expense not found" });
 
-    const familyId = (req.user && req.user.familyId) || expense.familyId;
+    const familyId = req.user.familyId;
     if (familyId) {
       const actor = { id: req.user ? req.user.id : null, name: req.user ? req.user.name : null };
       socketService.emitToFamily(familyId, "expense-deleted", { id: expense._id, actor });
@@ -154,12 +188,15 @@ exports.getExpenseDashboard = async (req, res) => {
     }
 
     const familyId = req.user?.familyId;
-    if (!familyId) {
+    if (familyId === undefined) {
       return res.status(403).json({
         success: false,
         message: "Family ID is required"
       });
     }
+
+    // familyMatch is either an ObjectId (for family) or null (personal context)
+    const familyMatch = familyId ? new mongoose.Types.ObjectId(familyId) : null;
 
     const { year, month, monthKey, startDate, endDate } = monthRange;
 
@@ -176,7 +213,7 @@ exports.getExpenseDashboard = async (req, res) => {
     const currentMonthExpenses = await Expense.aggregate([
       {
         $match: {
-          familyId: new mongoose.Types.ObjectId(familyId),
+          familyId: familyMatch,
           date: { $gte: startDate, $lte: endDate }
         }
       },

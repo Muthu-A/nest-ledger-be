@@ -140,32 +140,31 @@ const filterAllowedFields = (obj, allowedFields) => {
  * @returns {string|null} - Valid familyId or null if not authorized
  */
 const getFamilyIdAndVerifyOwnership = async (req, FamilyMember) => {
-  // Candidate sources (priority): user.familyId > req.params.familyId > req.body.familyId
-  const candidate = req.user?.familyId || req.params?.familyId || req.body?.familyId;
+  // If no authenticated user, treat as unauthorized
+  if (!req.user) return undefined;
 
-  if (!candidate) {
+  // If the user already has a familyId (belongs to a family), return it (string)
+  if (req.user.familyId) return String(req.user.familyId);
+
+  // User does not belong to a family (personal account). Check if the request explicitly
+  // provided a familyId via params or body. If not provided, allow personal context by
+  // returning null (caller should interpret null as 'personal' and not treat as unauthorized).
+  const explicitFamilyId = req.params?.familyId ?? req.body?.familyId;
+
+  if (!explicitFamilyId) {
+    // No family requested and user has no family -> personal context allowed
     return null;
   }
 
-  // Normalize to string for comparison and validate as ObjectId when present
-  const familyIdStr = String(candidate);
-  if (!isValidObjectId(familyIdStr)) {
-    return null;
-  }
+  // If an explicit familyId was provided, validate it and verify membership
+  if (!isValidObjectId(explicitFamilyId)) return undefined;
 
-  // If the user's own familyId matches the candidate, accept without extra DB lookup.
-  // This avoids false negatives when a separate FamilyMember entry is missing.
-  if (req.user && req.user.familyId && String(req.user.familyId) === familyIdStr) {
-    return familyIdStr;
-  }
-
-  // Otherwise verify membership explicitly to prevent IDOR
   const membership = await FamilyMember.findOne({
-    familyId: familyIdStr,
+    familyId: explicitFamilyId,
     userId: req.user._id
   });
 
-  return membership ? familyIdStr : null;
+  return membership ? String(explicitFamilyId) : undefined;
 };
 
 module.exports = {

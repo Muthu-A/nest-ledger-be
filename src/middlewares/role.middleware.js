@@ -5,8 +5,10 @@ module.exports = function (allowedRoles) {
   const roles = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
   return async (req, res, next) => {
     try {
-      const familyId = req.params.familyId || req.body.familyId;
-      if (!familyId) return res.status(400).json({ message: "familyId required" });
+      // Extract familyId from authenticated user only, not from request body/params
+      const familyId = req.user.familyId;
+      if (!familyId) return res.status(400).json({ message: "User not associated with a family" });
+      
       const membership = await FamilyMember.findOne({ familyId, userId: req.user._id });
       if (!membership) return res.status(403).json({ message: "Not a family member" });
       if (!roles.includes(membership.role)) return res.status(403).json({ message: "Insufficient role" });
