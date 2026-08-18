@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Income = require("../models/Income");
 const Expense = require("../models/Expense");
 const FamilyMember = require("../models/FamilyMember");
@@ -14,7 +15,8 @@ exports.getIncomes = async (req, res) => {
       return res.status(403).json({ message: "Family context required" });
     }
     
-    const match = { familyId };
+    const familyObjectId = new mongoose.Types.ObjectId(familyId);
+    const match = { familyId: familyObjectId };
     if (monthRange && monthRange.startDate && monthRange.endDate) {
       match.date = { $gte: monthRange.startDate, $lte: monthRange.endDate };
     }
@@ -24,8 +26,13 @@ exports.getIncomes = async (req, res) => {
     const currentMonthTotal = incomes.reduce((sum, inc) => sum + (inc.amount || 0), 0);
     const totalIncome = Math.round(currentMonthTotal * 100) / 100;
 
+    const expenseMatch = { familyId: familyObjectId };
+    if (monthRange && monthRange.startDate && monthRange.endDate) {
+      expenseMatch.date = { $gte: monthRange.startDate, $lte: monthRange.endDate };
+    }
+
     const currentMonthExpenseAgg = await Expense.aggregate([
-      { $match: { familyId, date: { $gte: monthRange.startDate, $lte: monthRange.endDate } } },
+      { $match: expenseMatch },
       { $group: { _id: null, total: { $sum: "$amount" } } },
       { $project: { _id: 0, total: 1 } }
     ]);
@@ -38,7 +45,12 @@ exports.getIncomes = async (req, res) => {
     const endOfYear = new Date(Date.UTC(yearForStats, 11, 31, 23, 59, 59, 999));
 
     const monthlyAgg = await Income.aggregate([
-      { $match: { familyId, date: { $gte: startOfYear, $lte: endOfYear } } },
+      {
+        $match: {
+          familyId: familyObjectId,
+          date: { $gte: startOfYear, $lte: endOfYear }
+        }
+      },
       { $group: { _id: { month: { $month: "$date" } }, total: { $sum: "$amount" } } },
       { $project: { _id: 0, month: "$_id.month", total: 1 } }
     ]);

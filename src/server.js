@@ -23,6 +23,7 @@ const bugReportRoutes = require("./routes/bugReport.routes");
 const loanRoutes = require("./routes/loan.routes");
 const userRoutes = require("./routes/user.routes");
 const { getDashboardSummary, getRecentTransactions } = require("./controllers/dashboard.controller");
+const auth = require("./middlewares/auth.middleware");
 
 const http = require("http");
 const app = express();
@@ -88,8 +89,8 @@ const socketRoutes = require("./routes/socket.routes");
 const { startNotificationJobs } = require("./jobs/notificationJobs");
 const { startInvestmentJobs } = require("./jobs/investmentJobs");
 app.use("/api/socket", socketRoutes);
-app.get("/api/summary", getDashboardSummary);
-app.get("/api/recent", getRecentTransactions);
+app.get("/api/summary", auth, getDashboardSummary);
+app.get("/api/recent", auth, getRecentTransactions);
 
 app.get("/", (req, res) => {
   res.send("Family Budget API Running");
